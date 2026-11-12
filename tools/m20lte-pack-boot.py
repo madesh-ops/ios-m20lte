@@ -114,7 +114,14 @@ def cmd_pack(args):
         image_size = (len(image) + 0x10000 + 0xfff) & ~0xfff
         struct.pack_into("<3Q", image, 8, text_offset, image_size, flags)
     else:
-        print("warning: stock kernel header unreadable; keeping IMAGE header", file=sys.stderr)
+        # The M20's BOOT kernel slot holds uniLoader, which has no arm64 Image
+        # header; S-Boot copies the slot to 0x87000000 and jumps without
+        # reading one. xnu_boot still needs image_size to find the payload.
+        text_offset, _, flags = image_header(image)
+        image_size = (len(image) + 0x10000 + 0xfff) & ~0xfff
+        struct.pack_into("<3Q", image, 8, text_offset, image_size, flags)
+        print("note: stock kernel has no arm64 Image header; image_size set from IMAGE",
+              file=sys.stderr)
     ramdisk = args.ramdisk.read_bytes() if args.ramdisk else b["ramdisk"]
     if not ramdisk:
         raise SystemExit("empty ramdisk")
