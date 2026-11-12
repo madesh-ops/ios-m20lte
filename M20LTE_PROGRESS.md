@@ -185,3 +185,16 @@ its first os_log. The donor (NOTES.md, image v7) found logd checks
 modes 0751/0755/0755 and a `.migrated` file, else asks logd_helper to
 migrate. Here logd_helper spun in the kernel (boot 4) and, refused (boot 5),
 leaves logd waiting. Next: inspect those directories in the image.
+
+Image check (private `inspect-root` workflow): /private/var/db/diagnostics
+272:272 0751, uuidtext 272:272 0755, diagnostics/timesync 272:272 0755,
+each with `.migrated` — what logd requires, so not the cause. The dyld
+cache files are hard links (link count 2) as mkiosroot.sh makes them.
+
+New suspect: eMMC writes. Our driver writes one 512-byte sector per
+polled CMD24 (A5 patch 0108); logd/logd_helper and the HFS journal write
+constantly, and logd_helper's 90 s of system time fits busy-polled writes
+on one CPU. 0400 now carries the A5 main-branch eMMC work (patches 0197
+multiblock CMD23+CMD18/25 behind `a5emmc_blocks=32`, 0198 completion
+events, 0208 bounded I/O limits, from orhunnx/ios-a5xelte), which also
+prints eMMC request/byte/time metrics with each log flush.
