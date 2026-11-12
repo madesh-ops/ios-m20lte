@@ -164,3 +164,24 @@ the key presses at the end report `(0 clients)`: backboardd never opened
 SweetHID. Next: 0400 builds bsd/dev/sweet_sample.c for M20LTE (started
 with the eMMC root): user backtraces of SpringBoard/backboardd 90 s after
 start and every 120 s, and with `sweettop=1` the busiest processes every 5 s.
+
+## 2026-11-13: boot 6 sampler — backboardd and SpringBoard wait on logd
+
+Kernel run 43276189360 (sweet_sample.c on M20LTE), `sweettop=1`. CPU table:
+SpringBoard busy for ~2 min, then the whole system idle (`all 1-2%`);
+backboardd never appears. Backtraces symbolicated in the private repo
+(`symbolicate` workflow: SystemOS shared cache, `ipsw dyld a2s`):
+
+- sample 0: backboardd in dyld `runAllInitializersForMain`; SpringBoard in
+  objc `load_categories_nolock` (start-up, still moving)
+- sample 1 (~2 min later), both main threads: `mach_msg2_trap` <-
+  `firehose_send_register` <- `firehose_client_reconnect` <-
+  `_os_trace_init_slow` <- `os_log_create` (backboardd from `BKLogCommon`,
+  SpringBoard from `CFBundleLoadingLogger` <- `+[NSBundle mainBundle]`)
+
+So logd never answers the firehose registration: every process blocks on
+its first os_log. The donor (NOTES.md, image v7) found logd checks
+/private/var/db/{diagnostics,uuidtext,diagnostics/timesync} for 272:272,
+modes 0751/0755/0755 and a `.migrated` file, else asks logd_helper to
+migrate. Here logd_helper spun in the kernel (boot 4) and, refused (boot 5),
+leaves logd waiting. Next: inspect those directories in the image.
