@@ -105,3 +105,16 @@ with tools/mkiosroot.sh and tools/sweet-root-tweaks.py after freeing
 ~30 GiB of runner toolkits (the first Linux run ran out of disk). The
 fsck and launchd/SpringBoard/dyld cache checks passed; published as a
 private release (6.2 GB gzip in 4 parts + d22ap.adt).
+
+## 2026-11-12: iOS root on USERDATA, first iOS boot
+
+`tools/m20lte-flash-root.py` wrote the 20480 MiB root to USERDATA p28 from
+TWRP (/data unmounted): 188 data chunks of 64 MiB each read back and
+hash-matched, 132 all-zero chunks cleared on the phone; image SHA-256
+51cec53c8db42095272444c5f0ddd2c003668c9fd5bdf9d42d66b4b3ea6a2ba9. ztOS is
+gone. BOOT: kernel run 43251997175 (keys), ADT with the D22AP /product,
+cmdline `debug=0xc serial=3 keepsyms=1 -noprogress -enable_kprintf_spam
+cpus=1 rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1
+cs_enforcement_disable=1 unentitled_ios_sim_launch=1 ignition_level=1
+launchd_unsecure_cache=1 wdt=-1 -wdt_no_pmu wdt_test=no_user_checkin
+a5fb_noconsole=1`; readback matched.
