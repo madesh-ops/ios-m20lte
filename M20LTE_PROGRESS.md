@@ -38,3 +38,18 @@ record agree:
 
 The PMU recovery request returned the phone to TWRP after 60 s. No other
 partition was written.
+
+## 2026-11-12: M20LTE kernel config and ADT (build only)
+
+`xnu/patches/0400-m20lte-board-target.patch` adds `MACHINE_CONFIG=M20LTE`:
+the A5XELTE code paths (4 KiB pages, `-mcpu=cortex-a53`, GICv2, MSHC eMMC)
+with the M20 values in `pexpert/arm64/A5XELTE.h` (framebuffer
+0xec000000 1080x2340, marker 0xc7fff100, boot MPIDR 0x100, eMMC
+0x13500000). The Exynos 7580 key and touch probes are compiled out.
+`tools/mkadt_m20lte.py` builds the matching ADT (RAM 0xc8000000 + 512 MiB).
+The patch was generated against xnu-8796.141.3 with this branch's series
+applied (252 of 254 apply with `git apply`; 0031 and 0041 need the HFS
+sources that `0026-stage-hfs.sh` stages in CI).
+
+First kernel test plan: BOOT only, `cpus=1`, `emmcprobe=1` (read-only GPT
+read), no root device. Expected stop: waiting for the root device.
