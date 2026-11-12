@@ -256,7 +256,7 @@ index 6d0b107..c478bc8 100644
  ARM64_PLKSEG_ADDR  =0xfffffff004004000
  ARM64_LINK_ADDR    =0xfffffff007004000
 diff --git a/pexpert/pexpert/arm64/A5XELTE.h b/pexpert/pexpert/arm64/A5XELTE.h
-index 8f9c8a2..2c4e16d 100644
+index 8f9c8a2..e31d56f 100644
 --- a/pexpert/pexpert/arm64/A5XELTE.h
 +++ b/pexpert/pexpert/arm64/A5XELTE.h
 @@ -26,6 +26,22 @@
@@ -265,7 +265,7 @@ index 8f9c8a2..2c4e16d 100644
  #define A5XELTE_BOOT_MPIDR            0x100
 +#elif defined(ARM64_BOARD_CONFIG_M20LTE)
 +/* Galaxy M20 SM-M205F (Exynos 7904): S-Boot leaves DECON_F scanning out
-+ * this buffer (uniLoader board-a30.c); the loader's log page is 0xc7fff000.
++ * this buffer (uniLoader board-a30.c); the loader's log page is 0x93fff000.
 + * Probe 2 (M20LTE_PROGRESS.md): S-Boot enters on the Cortex-A53 MPIDR 0x100. */
 +#define M20LTE                        1
 +#define SWEET_SMP_MAX_CPUS            1
@@ -276,7 +276,7 @@ index 8f9c8a2..2c4e16d 100644
 +#define A5XELTE_FB_BLOCKS             5     /* 2 MiB VA=PA blocks: 10,108,800 bytes */
 +#define A5XELTE_FB_TEXT_SCALE         2
 +#define A5XELTE_FB_DOT_PITCH          409   /* 1080 pixels across 6.3 inches */
-+#define A5XELTE_MARKER_PA             0xc7fff100
++#define A5XELTE_MARKER_PA             0x93fff100
 +#define A5XELTE_BOOT_MPIDR            0x100
 +#define A5XELTE_EMMC_PA               0x13500000
  #else

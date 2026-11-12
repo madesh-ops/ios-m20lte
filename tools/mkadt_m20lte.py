@@ -13,8 +13,9 @@ from pathlib import Path
 import adt
 import mkadt
 
-DRAM_BASE = 0xc8000000      # isolated XNU window (shim/m20lte/xnu_boot.c)
-DRAM_SIZE = 0x20000000      # 512 MiB, ends below WLBT at 0xe9000000
+DRAM_BASE = 0x94000000      # isolated XNU window (shim/m20lte/xnu_boot.c);
+DRAM_SIZE = 0x20000000      # 512 MiB, ends below TIMA at 0xb8000000. Not in
+                            # the framebuffer's 1 GiB L1 region (boot 1).
 SOC_BASE = 0x10000000       # arm-io ranges base; child regs are relative
 FB_BASE, FB_WIDTH, FB_HEIGHT = 0xec000000, 1080, 2340
 EMMC_BASE = 0x13500000      # exynos7885.dtsi mmc@13500000

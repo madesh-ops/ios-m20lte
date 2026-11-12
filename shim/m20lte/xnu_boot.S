@@ -20,8 +20,8 @@ entry:
     mov x19, x0              /* FDT from S-Boot */
     mrs x20, CurrentEL
     mrs x21, sctlr_el1
-    /* Log page 0xc7fff000, below the XNU RAM window; XNU marks +0x100. */
-    ldr x13, =0xc7fff000
+    /* Log page 0x93fff000, below the XNU RAM window; XNU marks +0x100. */
+    ldr x13, =0x93fff000
     mov x14, x13
     add x15, x13, #4096
 inval_log:
@@ -49,7 +49,7 @@ zero_log:
     mov x2, x20
     mov x3, x21
     bl hero_prepare_xnu
-    ldr x13, =0xc7fff000
+    ldr x13, =0x93fff000
     cbz x0, fail
     mov x16, x0
     ldr x0, [x13, #136]       /* boot_args physical address (log[17]) */

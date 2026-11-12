@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  * m20lte (Galaxy M20, Exynos 7904) S-Boot loader for mkpayload.py version 1,
  * adapted from shim/herolte/xnu_boot.c. Single CPU, 4 KiB XNU, isolated
- * 512 MiB RAM window 0xc8000000..0xe8000000: free in the M20 DTB (reserved
- * regions at 0xc0000000+512K and from 0xe9000000 up; ztOS
- * devices/m20lte/kernel/exynos7904-m20lte.dts).
+ * 512 MiB RAM window 0x94000000..0xb4000000: free in the M20 DTB, above
+ * S-Boot's ESS/sec_debug/pstore logs (0x91200000..0x928a2000, kernel
+ * command line) and below TIMA at 0xb8000000. It must not share a 1 GiB
+ * L1 region with the framebuffer (0xec000000): XNU's A5XELTE bootstrap
+ * maps the framebuffer with its own L2 table, which replaced the RAM's
+ * V=P table when both were in 0xc0000000..0xffffffff (boot 1: green
+ * entry block, then a hang at MMU enable).
  *
  * Probe 2 (2026-11-12): S-Boot enters at EL1, MMU off, on the A53 MPIDR
  * 0x100, with the kernel slot at 0x80080000, the initrd at 0x89000000 and
@@ -14,9 +18,9 @@
 #include "../fdt.h"
 #include "fbtext.h"
 
-#define LOG_BASE 0xc7fff000UL
-#define RAM_BASE 0xc8000000UL
-#define RAM_END  0xe8000000UL
+#define LOG_BASE 0x93fff000UL
+#define RAM_BASE 0x94000000UL
+#define RAM_END  0xb4000000UL
 /* Second DRAM bank (memory@880000000, 1 GiB on the 3 GB and 4 GB M20):
  * no reserved-memory node in it. */
 #define BANK2_BASE 0x880000000UL

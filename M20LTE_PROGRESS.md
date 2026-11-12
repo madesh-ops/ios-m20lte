@@ -53,3 +53,20 @@ sources that `0026-stage-hfs.sh` stages in CI).
 
 First kernel test plan: BOOT only, `cpus=1`, `emmcprobe=1` (read-only GPT
 read), no root device. Expected stop: waiting for the root device.
+
+## 2026-11-12: XNU boot 1 (kernel run 43232759082)
+
+BOOT p12 = xnu_boot loader + 0400 kernel + ADT (RAM 0xc8000000), cmdline
+`debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress
+emmcprobe=1`; readback hash matched. Phone photo: loader lines
+(ENTRY 0xC942C488, BOOTARGS 0xCA4AB000, JUMP TO XNU), then XNU's green
+entry block and its small entry text, and nothing after: no blue
+"MMU on" block. **XNU executed on the M20**; it stopped at MMU enable.
+
+Cause: `start.s` maps the framebuffer VA=PA with `create_bootstrap_mapping`
+into a new L2 table, assuming (its comment) that the framebuffer's 1 GiB
+L1 region differs from XNU RAM's. On the M20 both RAM (0xc8000000) and
+the framebuffer (0xec000000) were in 0xc0000000-0xffffffff, so the new L2
+replaced the kernel's V=P table. Fix: XNU RAM window moved to
+0x94000000-0xb4000000 (L1 region 2; free above S-Boot's logs at
+0x91200000-0x928a2000 and below TIMA 0xb8000000), log page 0x93fff000.
