@@ -8,7 +8,7 @@ The stock BOOT may contain private data; keep it and every output off Git.
   pack  STOCK IMAGE OUT [--append P] [--ramdisk R] [--partition-size N]
         replace the kernel with IMAGE (probe or XNU loader), keep the stock
         DTBH, optionally append the XNU payload to IMAGE (S-Boot loads the
-        kernel slot at 0x87000000, uniLoader a30_defconfig) or replace the
+        kernel slot at 0x80080000, probe 2) or replace the
         ramdisk. Adapted from tools/herolte-pack-boot.py.
 """
 import argparse
@@ -115,7 +115,7 @@ def cmd_pack(args):
         struct.pack_into("<3Q", image, 8, text_offset, image_size, flags)
     else:
         # The M20's BOOT kernel slot holds uniLoader, which has no arm64 Image
-        # header; S-Boot copies the slot to 0x87000000 and jumps without
+        # header; S-Boot copies the slot to 0x80080000 and jumps without
         # reading one. xnu_boot still needs image_size to find the payload.
         text_offset, _, flags = image_header(image)
         image_size = (len(image) + 0x10000 + 0xfff) & ~0xfff

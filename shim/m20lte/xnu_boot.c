@@ -5,9 +5,10 @@
  * regions at 0xc0000000+512K and from 0xe9000000 up; ztOS
  * devices/m20lte/kernel/exynos7904-m20lte.dts).
  *
- * S-Boot loads the BOOT kernel slot at 0x87000000 (uniLoader a30_defconfig
- * TEXT_BASE), so the packer appends the payload to this Image; the initrd
- * is only a fallback.
+ * Probe 2 (2026-11-12): S-Boot enters at EL1, MMU off, on the A53 MPIDR
+ * 0x100, with the kernel slot at 0x80080000, the initrd at 0x89000000 and
+ * the FDT at 0x8a000000. The packer appends the payload to this Image, so
+ * it must end below 0x89000000 (~143 MiB; BOOT itself is 32 MiB).
  */
 #include <stdint.h>
 #include "../fdt.h"

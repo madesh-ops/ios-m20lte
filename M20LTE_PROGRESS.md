@@ -1,0 +1,40 @@
+# Galaxy M20 (m20lte, SM-M205F, Exynos 7904) progress
+
+Port of this tree (A5XELTE / HEROLTE lineage) to the Galaxy M20. Device
+evidence, build results and screen reports are recorded separately.
+
+## Board facts (from ztOS's devices/m20lte and mainline exynos7885.dtsi)
+
+| Item | Value |
+| --- | --- |
+| CPUs | 6x Cortex-A53 (MPIDR 0x100-0x103, 0x200-0x201), 2x Cortex-A73 (0x0, 0x1); boots on 0x100 |
+| GIC | GIC-400 (GICv2): distributor 0x12301000, CPU interface 0x12302000 |
+| Timer | 26 MHz; virtual timer PPI 11 (INTID 27) |
+| RAM (3 GB) | 0x80000000-0xbd9fffff, 0xc0000000-0xffffffff, 0x880000000-0x8bfffffff |
+| Reserved | 0x80000000+0x1000 sec_debug, 0x80002000+0x2000, 0x91200000 ESS, 0x92400000+0x8000 ramoops (TWRP pstore), 0xb8000000+2M TIMA, 0xc0000000+512K seclog, 0xe9000000+8M WLBT/ABOX, 0xec000000+20M framebuffer, 0xf5400000+136M modem, 0xfdc00000+32M CP log, 0xffc00000+4M GNSS |
+| XNU window | 0xc8000000-0xe8000000 (512 MiB); log page 0xc7fff000 |
+| Display | S-Boot framebuffer 0xec000000, 1080x2340 ARGB8888, stride 4320; DECON_F 0x14860000, HW_SW_TRIG_CONTROL (+0x70) = 0x1281 |
+| eMMC | DesignWare MSHC at 0x13500000 |
+| PMU | 0x11c80000: INFORM2 +0x808, INFORM3 +0x80c (0x12345674 = TWRP), SWRESET +0x400 |
+| Partitions | BOOT p12 (32 MiB), RECOVERY p13 (TWRP), EFS p3, SYSTEM p20, USERDATA p28 |
+
+## Log channel
+
+`shim/m20lte/fbtext.c` mirrors every loader/probe screen line into TWRP's
+pstore pmsg zone (0x92404000). After the reset to TWRP:
+`adb shell cat /sys/fs/pstore/pmsg-ramoops-0`.
+
+## 2026-11-12: stage-0 probe on the phone
+
+Probe 1 and probe 2 (`shim/m20lte/probe.*`, CI run 43226544191) were written
+to BOOT p12 from TWRP; readback hashes matched. Screen photo and pstore
+record agree:
+
+    EL 1, SCTLR 0x30C5183E (MMU off), FDT 0x8A000000, IMAGE 0x80080000,
+    MIDR 0x410FD034 (Cortex-A53 r0p4), MPIDR 0x80000100,
+    ID_AA64MMFR0 0x1122 (no 16 KiB granule), PFR0 0x2222, ISAR0 0x11120,
+    CNTFRQ 26 MHz, DECON trigger before 0x1290,
+    initrd 0x89000000..0x89000014, 16K PAGES: NO
+
+The PMU recovery request returned the phone to TWRP after 60 s. No other
+partition was written.
