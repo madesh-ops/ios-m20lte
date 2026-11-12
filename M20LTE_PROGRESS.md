@@ -198,3 +198,21 @@ on one CPU. 0400 now carries the A5 main-branch eMMC work (patches 0197
 multiblock CMD23+CMD18/25 behind `a5emmc_blocks=32`, 0198 completion
 events, 0208 bounded I/O limits, from orhunnx/ios-a5xelte), which also
 prints eMMC request/byte/time metrics with each log flush.
+
+## 2026-11-13: trying tlfares/iOS16-on-A40's prebuilt kernel (same SoC)
+
+tlfares/iOS16-on-A40 boots iOS 16.7.16 to the lock and home screen on the
+Galaxy A40 (Exynos 7904): XNU on the two Cortex-A73s with 16 KiB pages
+(loader16 powers an A73 through the PMU), GIC-400, dw_mmc multiblock eMMC,
+the same framebuffer/DECON trigger and GPA1 keys as the M20. User chose to
+try its prebuilt `boot-ios16-a40.img` (SHA-1 30cfde05..., matches its
+SHA1SUMS) adapted without rebuilding:
+
+- payload mem_size and ADT /chosen dram-size 2 GiB -> 1 GiB (the M20 3 GB
+  upper bank is 0x880000000-0x8bfffffff); ADT otherwise unchanged
+- cmdline + `ufsroot=USERDATA` (M20 GPT name) `sweettouch=0` (its touch
+  driver is for the A40's Zinitix and drives A40 pins)
+- kernel slot (loader16 + payload) repacked with tools/m20lte-pack-boot.py
+  around the M20 BOOT header and DTBH; BOOT readback matched
+  (sha256 1b389f86...). USERDATA (our Linux-built iOS root) unchanged.
+Its kernel log ring is at the end of the root partition (USERDATA).
