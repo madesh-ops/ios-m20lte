@@ -150,3 +150,17 @@ flush #15, 31,596 bytes, 661 lines. **The log ring works on the M20.**
 
 Next: 0400 adds boot-arg `m20noexec=` (refuse exec by base name);
 boot with `m20noexec=logd_helper`.
+
+## 2026-11-12: iOS boot 5 with m20noexec=logd_helper
+
+Kernel run 43270241404. Log flush #33 (~5.5 min, to the forced reset):
+launchd's cache loader finishes, `Early boot complete. Continuing system
+boot.`, then **`exec SpringBoard` and `exec backboardd`** with keybagd,
+configd, mediaserverd, logd, lockdownd, IOMFB_FDR_Loader, notifyd,
+runningboardd and ~60 more. logd_helper is refused about every 10 s; no
+CPU-burning warning, and the log keeps flushing (no stall). But nothing
+from backboardd or SpringBoard after exec (no exit, no crash line), and
+the key presses at the end report `(0 clients)`: backboardd never opened
+SweetHID. Next: 0400 builds bsd/dev/sweet_sample.c for M20LTE (started
+with the eMMC root): user backtraces of SpringBoard/backboardd 90 s after
+start and every 120 s, and with `sweettop=1` the busiest processes every 5 s.

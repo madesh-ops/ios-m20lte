@@ -12,7 +12,7 @@ index 7dee125..aa50bf8 100644
  SWEET_PTHREAD_INC = -I$(SWEET_PTHREAD_ROOT) -I$(SWEET_PTHREAD_ROOT)/private -I$(SWEET_PTHREAD_ROOT)/include
  sweet_pthread_init.o_INCFLAGS = $(SWEET_PTHREAD_INC)
 diff --git a/bsd/dev/a5xelte_emmc.c b/bsd/dev/a5xelte_emmc.c
-index 9ad7fd6..65f69e0 100644
+index 9ad7fd6..6518533 100644
 --- a/bsd/dev/a5xelte_emmc.c
 +++ b/bsd/dev/a5xelte_emmc.c
 @@ -22,6 +22,7 @@
@@ -32,6 +32,20 @@ index 9ad7fd6..65f69e0 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
+@@ -748,6 +749,13 @@ a5xelte_emmc_rootdev(dev_t *dev)
+ 		printf("A5XELTE eMMC: /dev/emmcroot0 ready, GPT %s %s\n",
+ 		    emmc_partition_name, emmc_writable ? "writable" : "read-only");
+ 		emmc_log_start();
++#if defined(ARM64_BOARD_CONFIG_M20LTE)
++		/* bsd/dev/sweet_sample.c: user backtraces of the processes in
++		 * boot-arg sweetsample (default SpringBoard,backboardd) and, with
++		 * sweettop=1, the busiest processes every 5 s. As herolte_ufs.c. */
++		extern void sweet_sample_start(void);
++		sweet_sample_start();
++#endif
+ 	}
+ 	*dev = emmc_bdev;
+ 	return 0;
 diff --git a/bsd/dev/a5xelte_keys.c b/bsd/dev/a5xelte_keys.c
 index 9576d7d..48383d5 100644
 --- a/bsd/dev/a5xelte_keys.c
@@ -113,6 +127,22 @@ index fee06e2..57ce542 100644
 \ No newline at end of file
 +}
 +#endif /* ARM64_BOARD_CONFIG_HEROLTE */
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index 7620c41..4b4a578 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -1,4 +1,4 @@
+-#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_HEROLTE)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_HEROLTE) || defined(ARM64_BOARD_CONFIG_M20LTE)
+ /*
+  * SWEET process sampler: where is a daemon stuck?
+  *
+@@ -225,4 +225,4 @@ sweet_sample_start(void)
+ 	}
+ }
+ 
+-#endif /* ARM64_BOARD_CONFIG_SWEET || ARM64_BOARD_CONFIG_HEROLTE */
++#endif /* ARM64_BOARD_CONFIG_SWEET || ARM64_BOARD_CONFIG_HEROLTE || ARM64_BOARD_CONFIG_M20LTE */
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index 62f690d..514fd83 100644
 --- a/bsd/kern/kern_exec.c
