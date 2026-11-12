@@ -32,6 +32,29 @@ index 9ad7fd6..65f69e0 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
+diff --git a/bsd/dev/herolte_wifi.c b/bsd/dev/herolte_wifi.c
+index fee06e2..57ce542 100644
+--- a/bsd/dev/herolte_wifi.c
++++ b/bsd/dev/herolte_wifi.c
+@@ -6,6 +6,10 @@
+  *
+  * The firmware, the NVRAM and the CLM are the phone's own, from VENDOR, in the drop zone: they are not in this repository.
+  */
++/* Galaxy S7 only: its network stack (sweet_net.c, sweet_sta.c,
++ * SweetNetworkStack.cpp) is built for SWEET and HEROLTE, not the other
++ * A5XELTE-based boards (M20LTE). */
++#if defined(ARM64_BOARD_CONFIG_HEROLTE)
+ #include <stdarg.h>
+ #include <sys/param.h>
+ #include <sys/systm.h>
+@@ -2137,4 +2141,5 @@ herolte_wifi_files_ready(void)
+ 	}
+ 	vnode_put(vp);
+ 	return true;
+-}
+\ No newline at end of file
++}
++#endif /* ARM64_BOARD_CONFIG_HEROLTE */
 diff --git a/config/MASTER.arm64.m20lte b/config/MASTER.arm64.m20lte
 new file mode 100644
 index 0000000..9d715ff
