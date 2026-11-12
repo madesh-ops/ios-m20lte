@@ -32,6 +32,64 @@ index 9ad7fd6..65f69e0 100644
  		printf("A5XELTE eMMC: missing or unexpected ADT register window\n");
  		return ENXIO;
  	}
+diff --git a/bsd/dev/a5xelte_keys.c b/bsd/dev/a5xelte_keys.c
+index 9576d7d..48383d5 100644
+--- a/bsd/dev/a5xelte_keys.c
++++ b/bsd/dev/a5xelte_keys.c
+@@ -9,6 +9,11 @@
+  * 0x10580000, Power GPA2 pin 4, Volume Up/Down and Home GPA0 pins 3/4/5,
+  * active low.  S-Boot reads them too, so their mux is already set; the two
+  * DAT registers are sampled together (bits 0-7 GPA0, 8-15 GPA2).
++ *
++ * M20LTE (Galaxy M20, Exynos 7904; ztOS DTS gpio-keys, mainline
++ * pinctrl-exynos-arm64.c exynos7885_pin_banks0): ALIVE at 0x11cb0000, GPA1
++ * at +0x60; Volume Up/Down and Power on GPA1 pins 5/6/7, active low. No
++ * Home key: its pin index 15 lies outside the 8-bit sample and never changes.
+  */
+ #if defined(ARM64_BOARD_CONFIG_A5XELTE)
+ #include <sys/param.h>
+@@ -28,6 +33,11 @@ extern void sweet_hid_key(int key, int down);
+ #define A5_GPA0_CON 0x00u
+ #define A5_GPA0_DAT 0x04u
+ #define A5_GPA0_PUD 0x08u
++#elif defined(ARM64_BOARD_CONFIG_M20LTE)
++#define A5_ALIVE_PA 0x11cb0000u
++#define A5_GPA1_CON 0x60u
++#define A5_GPA1_DAT 0x64u
++#define A5_GPA1_PUD 0x68u
+ #else
+ #define A5_ALIVE_PA 0x139b0000u
+ #endif
+@@ -68,6 +78,13 @@ a5_keys_sample(void)
+ 	       ((a5_keys_read(A5_GPA2_DAT) & 0xff) << 8));
+ }
+ static const uint8_t a5_key_pins[4] = {8 + 4, 3, 4, 5};
++#elif defined(ARM64_BOARD_CONFIG_M20LTE)
++static uint16_t
++a5_keys_sample(void)
++{
++	return (uint16_t)(a5_keys_read(A5_GPA1_DAT) & 0xff);
++}
++static const uint8_t a5_key_pins[4] = {7, 5, 6, 15};
+ #else
+ static uint16_t
+ a5_keys_sample(void)
+@@ -138,9 +155,15 @@ a5xelte_keys_init(void)
+ 	    a5_keys_read(A5_GPA0_CON), a5_keys_read(A5_GPA0_DAT),
+ 	    a5_keys_read(A5_GPA0_PUD));
+ #endif
++#if defined(ARM64_BOARD_CONFIG_M20LTE)
++	printf("A5XELTE KEYS: M20 GPA1 con=%#x dat=%#x pud=%#x (read only)\n",
++	    a5_keys_read(A5_GPA1_CON), a5_keys_read(A5_GPA1_DAT),
++	    a5_keys_read(A5_GPA1_PUD));
++#else
+ 	printf("A5XELTE KEYS: GPA2 con=%#x dat=%#x pud=%#x (read only)\n",
+ 	    a5_keys_read(A5_GPA2_CON), a5_keys_read(A5_GPA2_DAT),
+ 	    a5_keys_read(A5_GPA2_PUD));
++#endif
+ 	kern_return_t kr = kernel_thread_start(a5_keys_thread, NULL, &thread);
+ 	if (kr == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
 diff --git a/bsd/dev/herolte_wifi.c b/bsd/dev/herolte_wifi.c
 index fee06e2..57ce542 100644
 --- a/bsd/dev/herolte_wifi.c
@@ -180,20 +238,18 @@ index 0000000..9d715ff
 +options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
 +options   CONFIG_KERNEL_TBI		# <kernel_tbi>
 diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
-index 10449ab..882fc41 100644
+index 10449ab..bf8c8d4 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -772,9 +772,15 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
+@@ -772,9 +772,13 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
  	}
  
  #if defined(ARM64_BOARD_CONFIG_A5XELTE)
 -	/* GPIO keys: Exynos 7580 or, on HEROLTE, the Exynos 8890 ALIVE pins. */
-+#if !defined(ARM64_BOARD_CONFIG_M20LTE)
-+	/* GPIO keys: Exynos 7580 or, on HEROLTE, the Exynos 8890 ALIVE pins.
-+	 * Not on the M20: its keys (GPA1 5..7) are not ported yet. */
++	/* GPIO keys: Exynos 7580, or the Exynos 8890 (HEROLTE) and Exynos 7904
++	 * (M20LTE) ALIVE pins (bsd/dev/a5xelte_keys.c). */
  	a5xelte_keys_init();
 -#if defined(ARM64_BOARD_CONFIG_HEROLTE)
-+#endif
 +#if defined(ARM64_BOARD_CONFIG_M20LTE)
 +	/* Galaxy M20: HX83112A in-cell touch, not ported yet. The Exynos 7580
 +	 * touch bus addresses below do not exist on the Exynos 7904. */
