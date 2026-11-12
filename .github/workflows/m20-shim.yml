@@ -1,0 +1,29 @@
+name: m20-shim
+# Builds the Galaxy M20 (m20lte) S-Boot images in shim/m20lte:
+# probe.Image (stage-0 handoff probe) and xnu_boot.Image (XNU loader).
+# Packing into BOOT happens on the host with tools/m20lte-pack-boot.py,
+# against the phone's own BOOT backup, which never goes into the repository.
+on:
+  workflow_dispatch:
+  push:
+    branches: [m20lte]
+    paths:
+      - "shim/m20lte/**"
+      - "shim/fdt.c"
+      - "shim/fdt.h"
+      - ".github/workflows/m20-shim.yml"
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Build
+        run: sh shim/m20lte/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m20-shim
+          path: |
+            shim/m20lte/out/*.Image
+            shim/m20lte/out/*.elf
