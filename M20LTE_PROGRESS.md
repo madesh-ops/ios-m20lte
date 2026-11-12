@@ -89,3 +89,19 @@ Phone photo, in order:
 
 This is the planned stop: no root device was given. Memory map, MMU,
 GICv2, timer, framebuffer console and eMMC reads are working on the M20.
+
+## 2026-11-12: Power and volume keys (kernel run 43251997175)
+
+Patch 0400 enables `a5xelte_keys.c` on M20LTE, polling ALIVE 0x11cb0000
+GPA1 DAT (+0x64), read only. Phone photo at the root-device wait, each key
+pressed several times: idle `gpio=0xe0`; Volume Up `key=1 down=1 gpio=0xc0`
+-> HID 0xe9; Volume Down `key=2 down=1 gpio=0xa0` -> HID 0xea; Power
+`key=0 down=1 gpio=0x60` -> HID 0x30; every release `down=0`. Keys work.
+
+## 2026-11-12: iOS root image (private repo, run 43252521896)
+
+iOS 16.7.16 (20H392) iPhone X root, 20480 MiB HFSX, built on ubuntu-24.04
+with tools/mkiosroot.sh and tools/sweet-root-tweaks.py after freeing
+~30 GiB of runner toolkits (the first Linux run ran out of disk). The
+fsck and launchd/SpringBoard/dyld cache checks passed; published as a
+private release (6.2 GB gzip in 4 parts + d22ap.adt).
