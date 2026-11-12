@@ -28,7 +28,7 @@ void hero_probe_main(uintptr_t fdt, uint64_t el, uint64_t sctlr, uint64_t image)
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r" (freq));
 
     unsigned row = 0;
-    hero_fb_text(row++, "M20LTE XNU PROBE 1");
+    hero_fb_text(row++, "M20LTE XNU PROBE 2");
     hero_fb_hex(row++, "EL", el >> 2);
     hero_fb_hex(row++, "SCTLR", sctlr);
     hero_fb_hex(row++, "FDT", fdt);

@@ -68,9 +68,42 @@ static void fill_row(unsigned row, uint32_t pixel)
             fb[y * HERO_FB_WIDTH + x] = pixel;
 }
 
+/*
+ * Mirror every line into TWRP's pstore pmsg zone so it can be read back with
+ * `cat /sys/fs/pstore/pmsg-ramoops-0` after the reset, without a photo.
+ * TWRP's ramoops: mem_address 0x92400000, mem_size 0x8000, record_size
+ * 0x4000 (dump zone first), pmsg_size 0x4000 -> pmsg zone at 0x92404000.
+ * persistent_ram_buffer: sig "DBGC", start, size, then the data.
+ */
+#define PSTORE_PMSG 0x92404000UL
+#define PSTORE_SIG 0x43474244U
+#define PSTORE_CAP (0x4000U - 12U)
+
+static void pstore_append(const char *s)
+{
+    volatile uint32_t *hdr = (volatile uint32_t *)PSTORE_PMSG;
+    volatile uint8_t *data = (volatile uint8_t *)(PSTORE_PMSG + 12U);
+    static int started;
+    if (!started) {
+        hdr[0] = PSTORE_SIG;
+        hdr[1] = 0;
+        hdr[2] = 0;
+        started = 1;
+    }
+    uint32_t n = hdr[2];
+    for (unsigned i = 0; s[i] && n < PSTORE_CAP - 1U; ++i)
+        data[n++] = (uint8_t)s[i];
+    if (n < PSTORE_CAP)
+        data[n++] = '\n';
+    hdr[2] = n;
+    __asm__ volatile("dsb sy" : : : "memory");
+}
+
 void hero_fb_text(unsigned row, const char *s)
 {
     volatile uint32_t *fb = (volatile uint32_t *)HERO_FB_BASE;
+    if (s[0] != 'T' || s[1] != 'W')   /* skip the per-second countdown */
+        pstore_append(s);
     unsigned top = TOP + row * CELL_H + 2U * SCALE;
     if (top + 7U * SCALE >= HERO_FB_HEIGHT) return;
     fill_row(row, 0xff000000U);
