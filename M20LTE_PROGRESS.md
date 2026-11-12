@@ -128,3 +128,25 @@ binaries and dyld loaded the shared cache. The console is flooded with
 same cnid=321234 again and again: Linux-made hard links lack
 kHFSHasLinkChainBit and XNU repairs them in memory on every lookup. 0041
 limits this to 8 notes for SWEET only; 0401 extends that to M20LTE.
+
+## 2026-11-12: iOS boot 4 with the persistent log (a5log=1)
+
+BOOT: kernel run 43263294919 (0401), the same cmdline plus `a5log=1`. The
+first 4 MiB + 512 bytes of SYSTEM p20 were saved to the PC first. TWRP read
+of SYSTEM p20 (`dd ... count=8193`, tools/a5xelte-log.py): `A5XLOG1`,
+flush #15, 31,596 bytes, 661 lines. **The log ring works on the M20.**
+
+- `A5XELTE LOG: SYSTEM GPT first=442368, 8193 sectors reserved`,
+  `BSD root: emmcroot0`, `hfs: mounted iOSRoot`, unsealed root, launchd
+- launchd: Darwin Bootstrapper 7.0.0, ondemand mode, boot tasks fsck,
+  mount-phase-1/2, data-protection, keybag, usermanagerd, dirs_cleaner;
+  about 60 services exec'd through xpcproxy (all `xstat 0`)
+- No backboardd or SpringBoard in ~160 s.
+- `process logd_helper[92] thread 329 caught burning CPU! ... 56% over
+  ~160 seconds`, lifetime 90.83 s system vs 0.10 s user: it spins in the
+  kernel. The log stops ~10 s later (the flush thread no longer ran), as
+  the first iOS boot stalled at the same point. With cpus=1 the spin
+  starves everything.
+
+Next: 0400 adds boot-arg `m20noexec=` (refuse exec by base name);
+boot with `m20noexec=logd_helper`.

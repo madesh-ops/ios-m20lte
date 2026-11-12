@@ -113,6 +113,54 @@ index fee06e2..57ce542 100644
 \ No newline at end of file
 +}
 +#endif /* ARM64_BOARD_CONFIG_HEROLTE */
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 62f690d..514fd83 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -5751,6 +5751,43 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_M20LTE)
++	/*
++	 * Boot-arg m20noexec=name1,name2: refuse to start programs with these
++	 * base names (EPERM), as HEROLTE's heronoexec. M20 iOS boot 3:
++	 * logd_helper spun in the kernel (90.8 s system time, 0.1 s user) and
++	 * starved the single CPU before backboardd was started.
++	 */
++	{
++		static char m20_noexec[256];
++		static int m20_noexec_read;
++		if (!m20_noexec_read) {
++			if (!PE_parse_boot_argn("m20noexec", m20_noexec, sizeof(m20_noexec))) {
++				m20_noexec[0] = '\0';
++			}
++			m20_noexec_read = 1;
++		}
++		if (m20_noexec[0]) {
++			const char *m20_path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++			const char *m20_base = strrchr(m20_path, '/');
++			m20_base = m20_base ? m20_base + 1 : m20_path;
++			size_t m20_len = strlen(m20_base);
++			const char *s = m20_noexec;
++			while (*s) {
++				const char *e = s;
++				while (*e && *e != ',') {
++					e++;
++				}
++				if ((size_t)(e - s) == m20_len && strncmp(s, m20_base, m20_len) == 0) {
++					printf("M20LTE: m20noexec refuses %s\n", m20_path);
++					error = EPERM;
++					goto bad;
++				}
++				s = *e ? e + 1 : e;
++			}
++		}
++	}
++#endif
+ #if defined(ARM64_BOARD_CONFIG_HEROLTE)
+ 	/* bsd/dev/herolte_gl.c: the EAGL shim for backboardd (boot-arg herogl). */
+ 	{
 diff --git a/config/MASTER.arm64.m20lte b/config/MASTER.arm64.m20lte
 new file mode 100644
 index 0000000..9d715ff
