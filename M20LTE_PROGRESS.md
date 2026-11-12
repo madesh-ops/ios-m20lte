@@ -118,3 +118,13 @@ cpus=1 rd=emmcroot0 emmcroot=USERDATA emmcwrite=1 rootrw=1
 cs_enforcement_disable=1 unentitled_ios_sim_launch=1 ignition_level=1
 launchd_unsecure_cache=1 wdt=-1 -wdt_no_pmu wdt_test=no_user_checkin
 a5fb_noconsole=1`; readback matched.
+
+First iOS boot, phone photo: **iOS userland runs.** launchd spawns
+services through xpcproxy (`exec cloudpaird`, `dasd`, `peakpowermanagerd`,
+`seld`, `bluetoothuserd`, `mlsd`, `remindd`, `logd_helper`;
+`EXIT xpcproxy[N] xstat 0`), so the eMMC root mounted, AMFI accepted the
+binaries and dyld loaded the shared cache. The console is flooded with
+`hfs: set hardlink bit on vol=iOSRoot cnid=... inoid=...`, at the end the
+same cnid=321234 again and again: Linux-made hard links lack
+kHFSHasLinkChainBit and XNU repairs them in memory on every lookup. 0041
+limits this to 8 notes for SWEET only; 0401 extends that to M20LTE.
