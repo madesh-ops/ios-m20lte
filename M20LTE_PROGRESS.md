@@ -70,3 +70,22 @@ the framebuffer (0xec000000) were in 0xc0000000-0xffffffff, so the new L2
 replaced the kernel's V=P table. Fix: XNU RAM window moved to
 0x94000000-0xb4000000 (L1 region 2; free above S-Boot's logs at
 0x91200000-0x928a2000 and below TIMA 0xb8000000), log page 0x93fff000.
+
+## 2026-11-12: XNU boot 2 reaches the root-device wait
+
+Kernel run 43237529281 with RAM at 0x94000000 (BOOT readback matched).
+Phone photo, in order:
+
+- `A5XELTE CPU: cpu=0 entered initCPU mpidr=0x100 EL1 IRQs=1`, `came alive;
+  SGI1 OK`, `1/1 CPUs initialized, SGI1 verified` (GIC-400 and timer work)
+- `SWEET FB: AppleCLCD 1080x2340 stride 4320 at 0xec000000 ... presented
+  as 1080x2340`, `A5XELTE FB: requested 30 Hz, effective 30 Hz`
+- SWEET AMFI, SWEET Sandbox and `SWEET HFS: hfs-627.100.6` registered;
+  Skywalk self-tests all PASSED; lo0/gif0/stf0 attached
+- `A5XELTE eMMC: ... first=442368 sectors=6963200 read-only` (GPT read on
+  the M20's MSHC; the SYSTEM entry, p20) — eMMC reads work
+- `Waiting on <dict>...IOMedia...Content...Apple_HFS</dict>` then
+  `Failed to write boot-picker-bringup-reason to NVRAM.`
+
+This is the planned stop: no root device was given. Memory map, MMU,
+GICv2, timer, framebuffer console and eMMC reads are working on the M20.
