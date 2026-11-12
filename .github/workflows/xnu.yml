@@ -10,8 +10,8 @@ on:
         description: RELEASE / DEVELOPMENT / DEBUG
         default: DEVELOPMENT
       machine_config:
-        description: xnu MACHINE_CONFIG (HEROLTE = Galaxy S7, A5XELTE, SWEET)
-        default: HEROLTE
+        description: xnu MACHINE_CONFIG (M20LTE = Galaxy M20, HEROLTE = Galaxy S7, A5XELTE, SWEET)
+        default: M20LTE
       keep_going:
         description: make -k (collect all compile errors in one run)
         default: "true"
@@ -33,7 +33,7 @@ env:
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
-  MACHINE_CONFIG: ${{ inputs.machine_config || 'HEROLTE' }}
+  MACHINE_CONFIG: ${{ inputs.machine_config || 'M20LTE' }}
 
 jobs:
   build:
@@ -65,7 +65,7 @@ jobs:
           from pathlib import Path
           path, config = Path(sys.argv[1]), sys.argv[2]
           old = 'ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"'
-          if config in ('A5XELTE', 'HEROLTE'):
+          if config in ('A5XELTE', 'HEROLTE', 'M20LTE'):
               new = ('ARCHS="arm64" VALID_ARCHS="arm64" OTHER_CFLAGS="-mkernel -nostdinc '
                      '-Wno-packed -mcpu=cortex-a53 -march=armv8-a+crypto"')
           else:
@@ -186,7 +186,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Check Cortex-A53 compatibility (no ARMv8.1 LSE atomics)
-        if: env.MACHINE_CONFIG == 'A5XELTE' || env.MACHINE_CONFIG == 'HEROLTE'
+        if: env.MACHINE_CONFIG == 'A5XELTE' || env.MACHINE_CONFIG == 'HEROLTE' || env.MACHINE_CONFIG == 'M20LTE'
         run: |
           kernel="out/kernel.$(echo "$KERNEL_CONFIG" | tr A-Z a-z).$(echo "$MACHINE_CONFIG" | tr A-Z a-z)"
           test -f "$kernel"
