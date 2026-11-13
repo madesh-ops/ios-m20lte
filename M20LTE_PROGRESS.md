@@ -216,3 +216,12 @@ SHA1SUMS) adapted without rebuilding:
   around the M20 BOOT header and DTBH; BOOT readback matched
   (sha256 1b389f86...). USERDATA (our Linux-built iOS root) unchanged.
 Its kernel log ring is at the end of the root partition (USERDATA).
+
+**Result: LOCK SCREEN.** On 2026-11-13 the user reported the iOS 16.7.16
+lock screen on the Galaxy M20 with the A40 prebuilt kernel (1 GiB, two
+A73s, 16 KiB pages) and our Linux-built USERDATA root. Touch is off
+(sweettouch=0; the M20 has a Himax HX83112A, not the A40's Zinitix).
+
+Open: M20 touch driver (HX83112A: firmware waits until the host writes
+HSEN 0x10007f14 = 0, per ztOS), building the A40 kernel from source with
+M20 changes, more RAM (the low banks), GPU.
