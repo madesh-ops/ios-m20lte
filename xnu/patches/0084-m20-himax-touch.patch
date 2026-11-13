@@ -1,0 +1,421 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index bf085da..37a4db1 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -108,6 +108,7 @@ bsd/dev/sweet_ufs.c			standard
+ bsd/dev/a40_blk.c			standard
+ bsd/dev/a40_keys.c			standard
+ bsd/dev/a40_touch.c			standard
++bsd/dev/m20_touch.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+diff --git a/bsd/dev/a40_touch.c b/bsd/dev/a40_touch.c
+index c640939..8d0399a 100644
+--- a/bsd/dev/a40_touch.c
++++ b/bsd/dev/a40_touch.c
+@@ -259,6 +259,11 @@ a40_touch_init(void)
+ 	DTEntry node;
+ 	thread_t th;
+ 
++	/* Galaxy M20: Himax HX83112A on HS-I2C (bsd/dev/m20_touch.c). */
++	extern int m20_touch_init(void);
++	if (m20_touch_init()) {
++		return 1;
++	}
+ 	if (SecureDTLookupEntry(NULL, "/a40-touch", &node) != kSuccess) {
+ 		extern int a40_platform(void);
+ 		return a40_platform();
+diff --git a/bsd/dev/m20_touch.c b/bsd/dev/m20_touch.c
+new file mode 100644
+index 0000000..5a74862
+--- /dev/null
++++ b/bsd/dev/m20_touch.c
+@@ -0,0 +1,387 @@
++/*
++ * Galaxy M20 (Exynos 7904) touchscreen for the A40 port: Himax HX83112A,
++ * in-cell with the panel, at 0x48 on USI0's second HS-I2C channel
++ * (hsi2c_5, 0x13930000, pins gpc2-2/3 function 2), reset TSP_RST on gpg2-1
++ * (active low), attention line gpa0-0 (low = event ready). Started instead
++ * of the A40's Zinitix driver when the ADT has /m20-touch.
++ *
++ * Hardware facts from ztOS (madesh-ops/ztOS devices/m20lte: DTS and its
++ * himax_hx83112b changes) and mainline Linux (exynos7885 pinctrl, clocks,
++ * exynos-usi). The HS-I2C transfer is the polled one from the Galaxy S7 port
++ * (bsd/dev/herolte_touch.c, wardevsa/ios-a5xelte). The Himax protocol is
++ * mainline's drivers/input/touchscreen/himax_hx83112b.c with ztOS's HX83112A
++ * start-up: clear the firmware stop request, pulse reset, then write the
++ * HSEN flag, without which the firmware never scans.
++ * Everything polled from a kernel thread; touches go to
++ * sweet_hid_touch(finger, down, x, y) in panel pixels (1080 x 2340).
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++int m20_touch_init(void);
++
++#define M20_TOP_PINCTRL 0x139B0000UL    /* gpc2 +0x200, gpg2 +0x160 */
++#define M20_GPC2        0x200u
++#define M20_GPG2        0x160u
++#define M20_ALIVE_GPA0  0x11CB0040UL    /* CON +0, DAT +4 */
++#define M20_SYSREG_USI  0x10032000UL    /* USI0 SW_CONF, low 4 bits */
++#define M20_CMU_PERI    0x10010000UL
++#define M20_CMU_TOP     0x12060000UL
++#define M20_HSI2C       0x13930000UL
++#define HX_ADDR         0x48u
++
++#define HSI2C_CTL       0x00
++#define HSI2C_FIFO_CTL  0x04
++#define HSI2C_TRAILING  0x08
++#define HSI2C_INT_EN    0x20
++#define HSI2C_INT_STAT  0x24
++#define HSI2C_FIFO_STAT 0x30
++#define HSI2C_TX_DATA   0x34
++#define HSI2C_RX_DATA   0x38
++#define HSI2C_CONF      0x40
++#define HSI2C_AUTO_CONF 0x44
++#define HSI2C_TIMEOUT   0x48
++#define HSI2C_TRANS     0x50
++#define HSI2C_FS1       0x60
++#define HSI2C_FS2       0x64
++#define HSI2C_FS3       0x68
++#define HSI2C_SLA       0x6c
++#define HSI2C_ADDR      0x70
++
++/* Himax AHB bus over I2C (himax_hx83112b.c) */
++#define HX_AHB_ADDR_BYTE_0              0x00
++#define HX_AHB_ADDR_RDATA_BYTE_0        0x08
++#define HX_AHB_ADDR_ACCESS_DIRECTION    0x0c
++#define HX_AHB_ADDR_INCR4               0x0d
++#define HX_AHB_ADDR_CONTI               0x13
++#define HX_AHB_ADDR_EVENT_STACK         0x30
++#define HX_AHB_CMD_INCR4                0x10
++#define HX_AHB_CMD_CONTI                0x31
++#define HX_REG_ICID                     0x900000d0u
++#define HX_REG_FW_CTRL                  0x9000005cu     /* ztOS: sense on */
++#define HX_REG_HSEN                     0x10007f14u     /* ztOS: start scanning */
++#define HX_PRODUCT_ID                   0x83112au
++#define HX_POINTS                       10
++#define HX_EVENT_SIZE                   56
++
++static vm_offset_t m20_top, m20_gpa0, m20_i2c;
++static int m20_touch_chan;
++
++static inline uint32_t rd(vm_offset_t b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
++static inline void wr(vm_offset_t b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; }
++
++static void
++m20_sleep_ms(uint32_t ms)
++{
++	assert_wait_timeout((event_t)&m20_touch_chan, THREAD_UNINT, ms, NSEC_PER_MSEC);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++hs_bus_init(void)
++{
++	wr(m20_i2c, HSI2C_CTL, 0x80000009u);    /* SW reset, master, I2C mode */
++	wr(m20_i2c, HSI2C_CTL, 0x00000009u);
++	wr(m20_i2c, HSI2C_TIMEOUT, 0);
++	/*
++	 * The S7 port's fast-mode timing with a 4x larger clock divider: the
++	 * USI0 clock rate the bootloader left is not known here, and a slow
++	 * bus only costs a few milliseconds per 56-byte event.
++	 */
++	wr(m20_i2c, HSI2C_FS1, 0x78787800u);
++	wr(m20_i2c, HSI2C_FS2, 0x3c007878u);
++	wr(m20_i2c, HSI2C_FS3, 0x000300f0u);
++	wr(m20_i2c, HSI2C_SLA, 0x3cu);
++	wr(m20_i2c, HSI2C_TRAILING, 0xfu);
++	wr(m20_i2c, HSI2C_CONF, 0x80000000u);   /* AUTO mode */
++	wr(m20_i2c, HSI2C_INT_EN, 0);
++}
++
++static unsigned m20_errors;
++
++/* One message with STOP; the FIFO is drained while it runs. */
++static bool
++hs_message(bool receive, uint8_t *bytes, unsigned count)
++{
++	uint32_t last = 0;
++	bool xfer_done = false;
++	unsigned done = 0;
++
++	if (count == 0 || count > 128) {
++		return false;
++	}
++	wr(m20_i2c, HSI2C_INT_STAT, rd(m20_i2c, HSI2C_INT_STAT));
++	wr(m20_i2c, HSI2C_FIFO_CTL, 3u | (receive ? (1u << 4) : (1u << 16)));
++	wr(m20_i2c, HSI2C_ADDR, HX_ADDR << 10);
++	wr(m20_i2c, HSI2C_CTL, 9u | (receive ? 0x40u : 0x80u));
++	wr(m20_i2c, HSI2C_INT_EN, 0xf80u | (receive ? 0x42u : 1u));
++	wr(m20_i2c, HSI2C_AUTO_CONF, count | (receive ? 0x10000u : 0) | 0x20000u | 0x80000000u);
++	for (unsigned us = 0; us < 100000; us++) {
++		uint32_t irq = rd(m20_i2c, HSI2C_INT_STAT);
++		if (irq) {
++			last |= irq;
++			wr(m20_i2c, HSI2C_INT_STAT, irq);
++		}
++		if (irq & 0xf00u) {
++			break;
++		}
++		if (irq & 0x80u) {
++			xfer_done = true;
++		}
++		if (receive) {
++			while (done < count && ((rd(m20_i2c, HSI2C_FIFO_STAT) >> 16) & 0x7fu)) {
++				bytes[done++] = (uint8_t)rd(m20_i2c, HSI2C_RX_DATA);
++			}
++		} else {
++			while (done < count && !(rd(m20_i2c, HSI2C_FIFO_STAT) & (1u << 7))) {
++				wr(m20_i2c, HSI2C_TX_DATA, bytes[done++]);
++			}
++		}
++		if (done == count && (xfer_done || receive)) {
++			wr(m20_i2c, HSI2C_INT_EN, 0);
++			for (unsigned n = 0; n < 10000; n++) {
++				if (!(rd(m20_i2c, HSI2C_TRANS) & (1u << 17))) {
++					return true;
++				}
++				delay(1);
++			}
++			break;
++		}
++		delay(1);
++	}
++	if (m20_errors++ < 16) {
++		printf("M20 TOUCH: %s %u/%u failed int=%#x trans=%#x fifo=%#x\n",
++		    receive ? "rx" : "tx", done, count, last,
++		    rd(m20_i2c, HSI2C_TRANS), rd(m20_i2c, HSI2C_FIFO_STAT));
++	}
++	wr(m20_i2c, HSI2C_INT_EN, 0);
++	hs_bus_init();
++	return false;
++}
++
++/* regmap (8-bit register, 32-bit little-endian values) on the Himax AHB. */
++static bool
++hx_write(uint8_t reg, const uint32_t *vals, unsigned n)
++{
++	uint8_t b[1 + 4 * 2];
++	if (n > 2) {
++		return false;
++	}
++	b[0] = reg;
++	for (unsigned i = 0; i < n; i++) {
++		b[1 + 4 * i] = (uint8_t)vals[i];
++		b[2 + 4 * i] = (uint8_t)(vals[i] >> 8);
++		b[3 + 4 * i] = (uint8_t)(vals[i] >> 16);
++		b[4 + 4 * i] = (uint8_t)(vals[i] >> 24);
++	}
++	return hs_message(false, b, 1 + 4 * n);
++}
++
++static bool
++hx_raw_read(uint8_t reg, uint8_t *dst, unsigned len)
++{
++	for (unsigned attempt = 0; attempt < 5; attempt++) {
++		if (attempt) {
++			delay(200);
++		}
++		if (hs_message(false, &reg, 1) && hs_message(true, dst, len)) {
++			return true;
++		}
++	}
++	return false;
++}
++
++static bool
++hx_burst(void)
++{
++	uint32_t v = HX_AHB_CMD_CONTI;
++	if (!hx_write(HX_AHB_ADDR_CONTI, &v, 1)) {
++		return false;
++	}
++	v = HX_AHB_CMD_INCR4;
++	return hx_write(HX_AHB_ADDR_INCR4, &v, 1);
++}
++
++/* Write one 32-bit word to a chip address (regmap_bulk_write at BYTE_0). */
++static bool
++hx_ahb_write(uint32_t address, uint32_t value)
++{
++	uint32_t cmd[2] = { address, value };
++	return hx_burst() && hx_write(HX_AHB_ADDR_BYTE_0, cmd, 2);
++}
++
++static bool
++hx_ahb_read32(uint32_t address, uint32_t *value)
++{
++	uint32_t a = address, dir = 0;
++	uint8_t b[4];
++	if (!hx_write(HX_AHB_ADDR_BYTE_0, &a, 1) ||
++	    !hx_write(HX_AHB_ADDR_ACCESS_DIRECTION, &dir, 1) ||
++	    !hx_raw_read(HX_AHB_ADDR_RDATA_BYTE_0, b, 4)) {
++		return false;
++	}
++	*value = b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24;
++	return true;
++}
++
++/* TSP_RST, gpg2-1, active low: 1 = held in reset. */
++static void
++m20_reset(int asserted)
++{
++	uint32_t dat = rd(m20_top, M20_GPG2 + 4);
++	wr(m20_top, M20_GPG2 + 4, asserted ? (dat & ~(1u << 1)) : (dat | (1u << 1)));
++}
++
++static void
++m20_platform_setup(void)
++{
++	vm_offset_t peri = ml_io_map(M20_CMU_PERI, 0x4000);
++	vm_offset_t top_cmu = ml_io_map(M20_CMU_TOP, 0x4000);
++	vm_offset_t sysreg = ml_io_map(M20_SYSREG_USI, 0x1000);
++
++	/* Clocks (clk-exynos7885.c): CMU_TOP gate for the USI0 kernel clock,
++	 * CMU_PERI user mux (bit 4 = from CMU_TOP) and the USI0 PCLK/SCLK
++	 * gates (bit 21 on, bit 20 manual, bit 28 automatic gating off). */
++	uint32_t tg = rd(top_cmu, 0x2090), mux = rd(peri, 0x01c0);
++	uint32_t pg = rd(peri, 0x2084), sg = rd(peri, 0x2088);
++	wr(top_cmu, 0x2090, (tg & ~(1u << 28)) | (1u << 20) | (1u << 21));
++	wr(peri, 0x01c0, mux | (1u << 4));
++	wr(peri, 0x2084, (pg & ~(1u << 28)) | (1u << 20) | (1u << 21));
++	wr(peri, 0x2088, (sg & ~(1u << 28)) | (1u << 20) | (1u << 21));
++	printf("M20 TOUCH: clocks top %#x->%#x mux %#x->%#x pclk %#x->%#x sclk %#x->%#x div %#x\n",
++	    tg, rd(top_cmu, 0x2090), mux, rd(peri, 0x01c0), pg, rd(peri, 0x2084),
++	    sg, rd(peri, 0x2088), rd(top_cmu, 0x188c));
++
++	/* USI0 in I2C0_1 mode (exynos-usi.c v1: SW_CONF low four bits = 3). */
++	uint32_t usi = rd(sysreg, 0);
++	wr(sysreg, 0, (usi & ~0xfu) | 0x3u);
++
++	/* Pins: gpc2-2/3 function 2 (hs_i2c5_bus); gpg2-1 output (TSP_RST). */
++	uint32_t c2 = rd(m20_top, M20_GPC2), g2 = rd(m20_top, M20_GPG2);
++	wr(m20_top, M20_GPC2, (c2 & ~(0xffu << 8)) | (0x22u << 8));
++	wr(m20_top, M20_GPG2, (g2 & ~(0xfu << 4)) | (1u << 4));
++	m20_reset(0);
++	printf("M20 TOUCH: usi %#x->%#x gpc2 %#x->%#x gpg2 %#x->%#x gpa0 %#x\n",
++	    usi, rd(sysreg, 0), c2, rd(m20_top, M20_GPC2), g2, rd(m20_top, M20_GPG2),
++	    rd(m20_gpa0, 4));
++}
++
++static bool
++m20_himax_start(void)
++{
++	uint32_t id = 0;
++
++	hs_bus_init();
++	/* ztOS: the bootloader leaves the firmware stopped; clear its stop
++	 * request, pulse reset, give it 50 ms to reload from flash. */
++	if (!hx_ahb_write(HX_REG_FW_CTRL, 0)) {
++		printf("M20 TOUCH: sense on write failed\n");
++	}
++	m20_sleep_ms(20);
++	m20_reset(1);
++	m20_sleep_ms(20);
++	m20_reset(0);
++	m20_sleep_ms(50);
++	if (!hx_ahb_read32(HX_REG_ICID, &id)) {
++		printf("M20 TOUCH: no answer at 0x%x\n", HX_ADDR);
++		return false;
++	}
++	printf("M20 TOUCH: product id %#x (expected %#x)\n", id >> 8, HX_PRODUCT_ID);
++	/* ztOS: without HSEN = 0 the firmware never scans. */
++	if (!hx_ahb_write(HX_REG_HSEN, 0)) {
++		printf("M20 TOUCH: HSEN write failed\n");
++		return false;
++	}
++	return true;
++}
++
++static void
++m20_touch_thread(__unused void *arg, __unused wait_result_t wr_)
++{
++	bool down[HX_POINTS] = { false };
++	int lx[HX_POINTS] = { 0 }, ly[HX_POINTS] = { 0 };
++	unsigned events = 0, bad = 0;
++
++	m20_platform_setup();
++	m20_sleep_ms(20);
++	if (!m20_himax_start()) {
++		printf("M20 TOUCH: controller not ready, touch disabled\n");
++		return;
++	}
++	printf("M20 TOUCH: ready\n");
++	for (;;) {
++		if (rd(m20_gpa0, 4) & 1) {              /* attention high: nothing new */
++			m20_sleep_ms(8);
++			continue;
++		}
++		uint8_t e[HX_EVENT_SIZE];
++		if (!hx_raw_read(HX_AHB_ADDR_EVENT_STACK, e, sizeof(e))) {
++			m20_sleep_ms(8);
++			continue;
++		}
++		uint8_t sum = 0;
++		for (unsigned i = 0; i < sizeof(e); i++) {
++			sum = (uint8_t)(sum + e[i]);
++		}
++		if (sum != 0) {
++			if (bad++ < 8) {
++				printf("M20 TOUCH: bad checksum %#x\n", sum);
++			}
++			m20_sleep_ms(4);
++			continue;
++		}
++		unsigned n = (e[52] == 0xff) ? 0 : (e[52] & 0x0f);    /* num_points */
++		if (events++ < 4) {
++			printf("M20 TOUCH: event %u points\n", n);
++		}
++		for (int f = 0; f < HX_POINTS; f++) {
++			int x = e[4 * f] << 8 | e[4 * f + 1];
++			int y = e[4 * f + 2] << 8 | e[4 * f + 3];
++			/* empty slot: 0xffff, or (0, 0) on the HX83112A (ztOS) */
++			bool now = n && x != 0xffff && y != 0xffff && (x || y);
++			if (now && (!down[f] || x != lx[f] || y != ly[f])) {
++				down[f] = true;
++				lx[f] = x;
++				ly[f] = y;
++				sweet_hid_touch(f, 1, x, y);
++			} else if (!now && down[f]) {
++				down[f] = false;
++				sweet_hid_touch(f, 0, lx[f], ly[f]);
++			}
++		}
++		m20_sleep_ms(4);
++	}
++}
++
++/* 1 = this is the M20 (touch thread started or not needed), 0 = not an M20. */
++int
++m20_touch_init(void)
++{
++	DTEntry node;
++	thread_t th;
++
++	if (SecureDTLookupEntry(NULL, "/m20-touch", &node) != kSuccess) {
++		return 0;
++	}
++	m20_top = ml_io_map(M20_TOP_PINCTRL, 0x1000);
++	m20_gpa0 = ml_io_map(M20_ALIVE_GPA0 & ~0xfffUL, 0x1000) + (M20_ALIVE_GPA0 & 0xfff);
++	m20_i2c = ml_io_map(M20_HSI2C, 0x1000);
++	int enabled = 1;
++	(void)PE_parse_boot_argn("m20touch", &enabled, sizeof(enabled));
++	if (!enabled) {
++		printf("M20 TOUCH: disabled (m20touch=0)\n");
++		return 1;
++	}
++	if (kernel_thread_start(m20_touch_thread, NULL, &th) == KERN_SUCCESS) {
++		thread_deallocate(th);
++	}
++	return 1;
++}
