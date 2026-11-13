@@ -28,10 +28,10 @@ index c640939..8d0399a 100644
  		return a40_platform();
 diff --git a/bsd/dev/m20_touch.c b/bsd/dev/m20_touch.c
 new file mode 100644
-index 0000000..5a74862
+index 0000000..5e3e7d4
 --- /dev/null
 +++ b/bsd/dev/m20_touch.c
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,410 @@
 +/*
 + * Galaxy M20 (Exynos 7904) touchscreen for the A40 port: Himax HX83112A,
 + * in-cell with the panel, at 0x48 on USI0's second HS-I2C channel
@@ -351,13 +351,36 @@ index 0000000..5a74862
 +		return;
 +	}
 +	printf("M20 TOUCH: ready\n");
++	unsigned polls = 0, lows = 0;
++	uint64_t window = mach_absolute_time();
 +	for (;;) {
-+		if (rd(m20_gpa0, 4) & 1) {              /* attention high: nothing new */
-+			m20_sleep_ms(8);
-+			continue;
++		/*
++		 * Boot 1 (touch build 1) gated reads on the attention line and saw
++		 * a handful of events in minutes, with a lift never reported: the
++		 * line pulses between 8 ms polls. The event stack holds the latest
++		 * frame, so read it on every poll; the checksum drops partial ones.
++		 */
++		if (!(rd(m20_gpa0, 4) & 1)) {
++			lows++;
 +		}
 +		uint8_t e[HX_EVENT_SIZE];
-+		if (!hx_raw_read(HX_AHB_ADDR_EVENT_STACK, e, sizeof(e))) {
++		uint64_t t0 = mach_absolute_time();
++		bool ok = hx_raw_read(HX_AHB_ADDR_EVENT_STACK, e, sizeof(e));
++		polls++;
++		if (polls <= 3) {
++			uint64_t ns;
++			absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
++			printf("M20 TOUCH: event read %s in %llu us\n", ok ? "ok" : "failed", ns / 1000);
++		}
++		uint64_t now_ns;
++		absolutetime_to_nanoseconds(mach_absolute_time() - window, &now_ns);
++		if (now_ns > 30ull * NSEC_PER_SEC) {
++			printf("M20 TOUCH: 30 s: %u polls, %u events, %u bad, attention low %u\n",
++			    polls, events, bad, lows);
++			polls = lows = 0;
++			window = mach_absolute_time();
++		}
++		if (!ok) {
 +			m20_sleep_ms(8);
 +			continue;
 +		}
