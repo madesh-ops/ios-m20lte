@@ -1,0 +1,340 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 37a4db1..8c29224 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@ bsd/dev/a40_blk.c			standard
+ bsd/dev/a40_keys.c			standard
+ bsd/dev/a40_touch.c			standard
+ bsd/dev/m20_touch.c			standard
++bsd/dev/m20_cpufreq.c			standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+diff --git a/bsd/dev/m20_cpufreq.c b/bsd/dev/m20_cpufreq.c
+new file mode 100644
+index 0000000..46e6a07
+--- /dev/null
++++ b/bsd/dev/m20_cpufreq.c
+@@ -0,0 +1,308 @@
++/*
++ * Galaxy M20 (Exynos 7904): run the Cortex-A73 pair, where XNU runs, faster
++ * than the 1352 MHz S-Boot leaves it. Once, at boot, from a kernel thread.
++ *
++ * Everything follows ztOS's zrn-cpufreq.c for this phone (madesh-ops/ztOS
++ * devices/m20lte/drivers/zrn-cpufreq.c), which takes its levels from the
++ * bootloader's ECT for this chip: ASV table 3 for table version 20, speed
++ * group 9. It refuses to act unless the ASV fuses are exactly those, the A73
++ * PLL is at the 1352 MHz setting and BUCK2 reads the table's 806.25 mV.
++ *
++ * The voltage goes up first, through the APM (ACPM, the S2MPU08 PMIC on
++ * message channel 2: mainline drivers/firmware/samsung/exynos-acpm*.c with
++ * ztOS's Exynos 7885 layout, channel table at SRAM 0x02052000 + 0x4b80,
++ * doorbell 0x11c40000). Then the PLL is restarted with the cluster parked on
++ * its oscillator, interrupts off, up to five times (pll_1417x, as the Galaxy
++ * Tab A 10.1 2019 port found). There is no thermal throttling here: boot-arg
++ * m20a73mhz picks the level (default 1768; 0 leaves the clock alone).
++ */
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void m20_cpufreq_start(void);
++
++#define M20_CMU_CPUCL0          0x10900000UL    /* the A73 pair */
++#define PLL_CON0_CPUCL0         0x0140u
++#define MUX_CLK_CPUCL_PLL       0x1000u         /* bit 0: 1 = parked on the oscillator */
++#define MUX_BUSY                (1u << 16)
++#define PLL_ENABLE              (1u << 31)
++#define PLL_LOCKED              (1u << 29)
++#define PLL_MUX_SEL             (1u << 4)
++#define PLL_PMS_MASK            ((0x3ffu << 16) | (0x3fu << 8) | 0x7u)
++#define PLL_PMS(m, p, s)        (((uint32_t)(m) << 16) | ((p) << 8) | (s))
++
++#define ACPM_SRAM               0x02052000UL
++#define ACPM_SRAM_SIZE          0x1b000u
++#define ACPM_INITDATA           0x4b80u
++#define ACPM_MBOX               0x11c40000UL
++#define MBOX_INTGR0             0x08u
++#define MBOX_INTSR0             0x14u
++#define ACPM_PMIC_CHAN          2u
++#define ACPM_TYPE_PMIC          1u
++#define S2MPU08_B2CTRL2         0x17u           /* vdd_cpucl0, the A73s */
++#define BUCK_MIN_UV             300000u
++#define BUCK_STEP_UV            6250u
++
++#define SMC_CMD_REG             ((uint64_t)-101)
++#define ASV_FUSE0               0x10009000UL
++#define ASV_FUSE3               0x1000900cUL
++
++struct m20_level { unsigned mhz; uint32_t pms; unsigned uv; };
++static const struct m20_level a73_levels[] = {      /* zrn-cpufreq.c */
++	{ 1768, PLL_PMS(204, 3, 0), 962500 },
++	{ 1664, PLL_PMS(192, 3, 0), 918750 },
++	{ 1560, PLL_PMS(180, 3, 0), 875000 },
++	{ 1352, PLL_PMS(156, 3, 0), 806250 },
++};
++
++static vm_offset_t sram, mbox, cmu;
++static uint32_t chan_off;                       /* the channel's descriptor */
++static uint32_t c_qlen, c_mlen, tx_base, tx_front, tx_rear, rx_base, rx_front, rx_rear;
++static uint32_t seqnum;
++
++static inline uint32_t rd(vm_offset_t b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
++static inline void wr(vm_offset_t b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; }
++
++static bool
++fits(uint32_t off, uint32_t len)
++{
++	return !(off & 3) && off <= ACPM_SRAM_SIZE && len <= ACPM_SRAM_SIZE - off;
++}
++
++/*
++ * acpm_shmem: chans at +8, num_chans at +0x18. acpm_chan_shmem (0x48 bytes):
++ * id 0, type (reserved[2]) 0xc, APM RX = AP TX rear/front/base 0x10/0x14/0x18,
++ * APM TX = AP RX rear/front/base 0x28/0x2c/0x30, qlen 0x34, mlen 0x38,
++ * poll_completion 0x44.
++ */
++static bool
++acpm_open(void)
++{
++	sram = ml_io_map(ACPM_SRAM, ACPM_SRAM_SIZE);
++	mbox = ml_io_map(ACPM_MBOX, 0x1000);
++	uint32_t chans = rd(sram, ACPM_INITDATA + 8), n = rd(sram, ACPM_INITDATA + 0x18);
++	if (!n || n > 16 || ACPM_PMIC_CHAN >= n || !fits(chans, n * 0x48u)) {
++		printf("M20 CPU: implausible ACPM channel table (%#x, %u)\n", chans, n);
++		return false;
++	}
++	chan_off = chans + ACPM_PMIC_CHAN * 0x48u;
++	uint32_t id = rd(sram, chan_off), type = rd(sram, chan_off + 12);
++	uint32_t poll = rd(sram, chan_off + 0x44);
++	c_qlen = rd(sram, chan_off + 0x34);
++	c_mlen = rd(sram, chan_off + 0x38);
++	/* the APM's RX queue is the AP's TX queue, and the other way round */
++	tx_rear = rd(sram, chan_off + 0x10);
++	tx_front = rd(sram, chan_off + 0x14);
++	tx_base = rd(sram, chan_off + 0x18);
++	rx_rear = rd(sram, chan_off + 0x28);
++	rx_front = rd(sram, chan_off + 0x2c);
++	rx_base = rd(sram, chan_off + 0x30);
++	printf("M20 CPU: ACPM chan %u type %u poll %u qlen %u mlen %u\n", id, type, poll, c_qlen, c_mlen);
++	if (id != ACPM_PMIC_CHAN || type != 1 || !poll || c_qlen < 2 || c_qlen > 1024 ||
++	    c_mlen < 16 || c_mlen > 256 || (c_mlen & 3) ||
++	    !fits(tx_base, c_qlen * c_mlen) || !fits(rx_base, c_qlen * c_mlen) ||
++	    !fits(tx_rear, 4) || !fits(tx_front, 4) || !fits(rx_rear, 4) || !fits(rx_front, 4) ||
++	    rd(sram, tx_front) >= c_qlen || rd(sram, rx_rear) >= c_qlen) {
++		printf("M20 CPU: ACPM PMIC channel does not fit, giving up\n");
++		return false;
++	}
++	return true;
++}
++
++/* One PMIC request; cmd[1] of the answer returned, or false. */
++static bool
++acpm_pmic(bool write, uint8_t reg, uint8_t value, uint32_t *answer)
++{
++	uint32_t cmd[4];
++	uint32_t front = rd(sram, tx_front), next = (front + 1) % c_qlen;
++
++	for (unsigned us = 0; rd(sram, tx_rear) == next; us++) {      /* queue full */
++		if (us > 100000) {
++			return false;
++		}
++		delay(1);
++	}
++	seqnum = seqnum % 63 + 1;
++	cmd[0] = (ACPM_TYPE_PMIC << 8) | reg | (seqnum << 16);
++	cmd[1] = (write ? 1u : 0u) | ((uint32_t)value << 8);
++	cmd[2] = 0;
++	cmd[3] = (uint32_t)(mach_absolute_time() / 26000);           /* ms, 26 MHz */
++	for (int i = 0; i < 4; i++) {
++		wr(sram, tx_base + c_mlen * front + 4 * i, cmd[i]);
++	}
++	__builtin_arm_dsb(0xf);
++	wr(sram, tx_front, next);
++	for (unsigned us = 0; rd(mbox, MBOX_INTSR0) & (1u << (ACPM_PMIC_CHAN + 16)); us++) {
++		if (us > 2000) {
++			printf("M20 CPU: APM has not taken the last message\n");
++			return false;
++		}
++		delay(1);
++	}
++	wr(mbox, MBOX_INTGR0, 1u << (ACPM_PMIC_CHAN + 16));
++	for (unsigned us = 0; us < 100000; us += 20) {                  /* 100 ms */
++		uint32_t f = rd(sram, rx_front), i = rd(sram, rx_rear);
++		bool found = false;
++		while (i != f) {
++			uint32_t a = rx_base + c_mlen * i;
++			if (((rd(sram, a) >> 16) & 0x3f) == seqnum) {
++				*answer = rd(sram, a + 4);
++				found = true;
++			}
++			i = (i + 1) % c_qlen;
++		}
++		wr(sram, rx_rear, f);
++		if (found) {
++			return true;
++		}
++		delay(20);
++	}
++	printf("M20 CPU: ACPM timeout (seq %u)\n", seqnum);
++	return false;
++}
++
++static bool
++buck2_get(unsigned *uv)
++{
++	uint32_t a;
++	if (!acpm_pmic(false, S2MPU08_B2CTRL2, 0, &a) || (a >> 24)) {
++		return false;
++	}
++	*uv = BUCK_MIN_UV + ((a >> 8) & 0xff) * BUCK_STEP_UV;
++	return true;
++}
++
++static bool
++buck2_set(unsigned uv)
++{
++	uint32_t a;
++	unsigned sel = (uv - BUCK_MIN_UV + BUCK_STEP_UV - 1) / BUCK_STEP_UV;
++	return acpm_pmic(true, S2MPU08_B2CTRL2, (uint8_t)sel, &a) && !(a >> 24);
++}
++
++static uint64_t
++asv_fuse(uint64_t addr)
++{
++	register uint64_t x0 __asm__("x0") = SMC_CMD_REG;
++	register uint64_t x1 __asm__("x1") = (0x3ull << 30) | (addr >> 2);
++	register uint64_t x2 __asm__("x2") = 0;
++	register uint64_t x3 __asm__("x3") = 0;
++	__asm__ volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3) : :
++	    "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
++	    "x14", "x15", "x16", "x17", "memory");
++	return x2;
++}
++
++static void
++park(bool on)
++{
++	uint32_t v = rd(cmu, MUX_CLK_CPUCL_PLL) & ~1u;
++	wr(cmu, MUX_CLK_CPUCL_PLL, v | (on ? 1u : 0u));
++	for (int i = 0; i < 100 && (rd(cmu, MUX_CLK_CPUCL_PLL) & MUX_BUSY); i++) {
++		delay(1);
++	}
++}
++
++static bool
++pll_set(uint32_t pms)
++{
++	bool locked = false;
++	for (int t = 0; t < 5 && !locked; t++) {
++		boolean_t s = ml_set_interrupts_enabled(FALSE);
++		park(true);
++		uint32_t v = rd(cmu, PLL_CON0_CPUCL0) & ~(PLL_ENABLE | PLL_MUX_SEL | PLL_PMS_MASK);
++		wr(cmu, PLL_CON0_CPUCL0, v);
++		(void)rd(cmu, PLL_CON0_CPUCL0);
++		wr(cmu, PLL_CON0_CPUCL0, v | pms | PLL_ENABLE | PLL_MUX_SEL);
++		for (int i = 0; i < 200 && !locked; i++) {
++			locked = rd(cmu, PLL_CON0_CPUCL0) & PLL_LOCKED;
++			if (!locked) {
++				delay(1);
++			}
++		}
++		if (!locked) {
++			wr(cmu, PLL_CON0_CPUCL0, rd(cmu, PLL_CON0_CPUCL0) & ~(PLL_ENABLE | PLL_MUX_SEL));
++		}
++		park(false);
++		ml_set_interrupts_enabled(s);
++	}
++	return locked;
++}
++
++/* Iterations of a fixed loop in 20 ms of the 26 MHz timer: relative speed. */
++static uint64_t
++speed(void)
++{
++	uint64_t n = 0, end = mach_absolute_time() + 26000 * 20;
++	while (mach_absolute_time() < end) {
++		for (volatile int i = 0; i < 100; i++) {
++		}
++		n++;
++	}
++	return n;
++}
++
++static void
++m20_cpufreq_thread(__unused void *arg, __unused wait_result_t w)
++{
++	int mhz = 1768;
++	(void)PE_parse_boot_argn("m20a73mhz", &mhz, sizeof(mhz));
++	const struct m20_level *to = NULL, *boot = &a73_levels[3];
++	for (unsigned i = 0; i < sizeof(a73_levels) / sizeof(a73_levels[0]); i++) {
++		if ((int)a73_levels[i].mhz == mhz) {
++			to = &a73_levels[i];
++		}
++	}
++	if (!to || to == boot) {
++		printf("M20 CPU: A73 left at the bootloader's clock (m20a73mhz=%d)\n", mhz);
++		return;
++	}
++	uint64_t f0 = asv_fuse(ASV_FUSE0), f3 = asv_fuse(ASV_FUSE3);
++	if ((uint32_t)f0 != 0x00090009u || (f3 & 0x7f) != 0x14) {
++		printf("M20 CPU: ASV fuses %#llx/%#llx: not the table these voltages are for\n", f0, f3);
++		return;
++	}
++	cmu = ml_io_map(M20_CMU_CPUCL0, 0x2000);
++	uint32_t pms = rd(cmu, PLL_CON0_CPUCL0) & PLL_PMS_MASK;
++	unsigned uv = 0;
++	if (pms != boot->pms) {
++		printf("M20 CPU: A73 PLL %#x is not the 1352 MHz setting\n", pms);
++		return;
++	}
++	if (!acpm_open() || !buck2_get(&uv) || uv != boot->uv) {
++		printf("M20 CPU: BUCK2 %u uV, expected %u: leaving the clock alone\n", uv, boot->uv);
++		return;
++	}
++	uint64_t before = speed();
++	if (!buck2_set(to->uv)) {
++		printf("M20 CPU: BUCK2 write failed\n");
++		return;
++	}
++	delay((to->uv - boot->uv) / 12000 + 20);                  /* 12 mV/us ramp */
++	unsigned now_uv = 0;
++	(void)buck2_get(&now_uv);
++	if (!pll_set(to->pms)) {
++		printf("M20 CPU: PLL did not lock at %u MHz; back to 1352\n", to->mhz);
++		(void)pll_set(boot->pms);
++		(void)buck2_set(boot->uv);
++		return;
++	}
++	uint64_t after = speed();
++	printf("M20 CPU: A73 %u -> %u MHz, BUCK2 %u -> %u uV, loop %llu -> %llu (x%llu.%02llu)\n",
++	    boot->mhz, to->mhz, boot->uv, now_uv, before, after,
++	    after / before, (after * 100 / before) % 100);
++}
++
++void
++m20_cpufreq_start(void)
++{
++	thread_t th;
++	if (kernel_thread_start(m20_cpufreq_thread, NULL, &th) == KERN_SUCCESS) {
++		thread_deallocate(th);
++	}
++}
+diff --git a/bsd/dev/m20_touch.c b/bsd/dev/m20_touch.c
+index 5e3e7d4..ea3b254 100644
+--- a/bsd/dev/m20_touch.c
++++ b/bsd/dev/m20_touch.c
+@@ -394,6 +394,9 @@ m20_touch_init(void)
+ 	if (SecureDTLookupEntry(NULL, "/m20-touch", &node) != kSuccess) {
+ 		return 0;
+ 	}
++	/* bsd/dev/m20_cpufreq.c: the A73s from 1352 MHz to boot-arg m20a73mhz. */
++	extern void m20_cpufreq_start(void);
++	m20_cpufreq_start();
+ 	m20_top = ml_io_map(M20_TOP_PINCTRL, 0x1000);
+ 	m20_gpa0 = ml_io_map(M20_ALIVE_GPA0 & ~0xfffUL, 0x1000) + (M20_ALIVE_GPA0 & 0xfff);
+ 	m20_i2c = ml_io_map(M20_HSI2C, 0x1000);
